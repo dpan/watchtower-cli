@@ -1,0 +1,16 @@
+# watchtower-cli targets
+# Copy to ./targets.toml or ~/.config/watchtower-cli/targets.toml,
+# then use: watchtower-cli --target <name> <command>
+#
+# Do not commit targets.toml — it holds tokens.
+
+[[target]]
+name = "homelab"
+url = "http://192.168.1.100:8080"
+token = "your-api-token"
+# events_token = "your-events-token"
+
+[[target]]
+name = "cloud"
+url = "https://watchtower.example.com:8443"
+# token = "optional-per-target-token"

@@ -1,0 +1,66 @@
+name "watchtower-cli"
+bin "watchtower-cli"
+about "Command-line client for the Watchtower HTTP API (v1.21.0)"
+version "0.1.0-dev"
+license "MIT"
+author "Dimitris Panagiotakis"
+
+flag "--url <url>" global=#true help="Watchtower HTTP API base URL" env="WATCHTOWER_HTTP_API_URL"
+flag "-t --target <name>" global=#true help="Named target from targets.toml"
+flag "--token <token>" global=#true help="API token sent as Authorization: Bearer" env="WATCHTOWER_HTTP_API_TOKEN"
+flag "--events-token <token>" global=#true help="Token for GET /v1/events (separate from the API token)" env="WATCHTOWER_HTTP_API_EVENTS_TOKEN"
+flag "--timeout <duration>" global=#true help="HTTP client timeout" default="10m"
+flag "-k --insecure" global=#true help="Skip TLS certificate verification"
+
+cmd "update" help="Trigger container updates (POST /v1/update)" effect="write" {
+    flag "-i --image <image>" help="Filter by image name (repeatable)"
+    flag "-c --container <container>" help="Filter by container name or regex (repeatable)"
+    flag "--async" help="Run the update in the background (HTTP 202)"
+    flag "--api-timeout <duration>" help="Watchtower handler timeout override (query param timeout)"
+}
+
+cmd "check" help="Check for available updates without applying them (POST /v1/check)" effect="read" {
+    flag "-i --image <image>" help="Filter by image name (repeatable)"
+    flag "-c --container <container>" help="Filter by container name or regex (repeatable)"
+    flag "--api-timeout <duration>" help="Watchtower handler timeout override (query param timeout)"
+}
+
+cmd "containers" help="List watched containers (GET /v1/containers)" effect="read" {
+    flag "-n --name <name>" help="Filter by exact container name (repeatable)"
+    flag "-i --image <image>" help="Filter by image name (repeatable)"
+    cmd "details" help="Detailed container status (GET /v1/containers/details)" {
+        flag "-n --name <name>" help="Filter by exact container name (repeatable)"
+        flag "-i --image <image>" help="Filter by image name (repeatable)"
+    }
+}
+
+cmd "history" help="Scan history from the in-memory ring buffer (GET /v1/history)" effect="read" {
+    flag "--since <timestamp>" help="RFC3339 timestamp; entries at or after"
+    flag "--until <timestamp>" help="RFC3339 timestamp; entries at or before"
+    flag "--limit <n>" help="Maximum number of entries"
+}
+
+cmd "images" help="List tracked images (GET /v1/images)" effect="read" {
+    flag "-n --name <name>" help="Filter by exact image name (repeatable)"
+    flag "--id <id>" help="Filter by image ID (repeatable)"
+}
+
+cmd "config" help="Show the active Watchtower configuration (GET /v1/config)" effect="read"
+
+cmd "status" help="Summary of the most recent scan (GET /v1/status)" effect="read"
+
+cmd "metrics" help="Prometheus metrics (GET /v1/metrics)" effect="read"
+
+cmd "events" help="Stream operational events via SSE (GET /v1/events)" effect="read"
+
+cmd "probe" help="TCP connectivity check against the API URL (does not send a token)" effect="read"
+
+cmd "health" help="Watchtower health probes" effect="read" {
+    cmd "live" help="Liveness probe (GET /livez)" {
+        alias "liveness"
+    }
+    cmd "ready" help="Readiness probe (GET /readyz)" {
+        alias "readiness"
+    }
+    cmd "startup" help="Startup probe (GET /startupz)"
+}

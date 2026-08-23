@@ -1,0 +1,39 @@
+min_version = "2025.8.0"
+
+[tools]
+go = "1.27"
+usage = "latest"
+
+[tasks.build]
+description = "Build the CLI"
+alias = "b"
+run = "mkdir -p dist && go build -o dist/watchtower-cli ./cmd/watchtower-cli"
+sources = ["go.mod", "go.sum", "**/*.go"]
+outputs = ["dist/watchtower-cli"]
+
+[tasks.install]
+description = "Install watchtower-cli to ~/.local/bin"
+depends = ["build"]
+run = "install -m 755 dist/watchtower-cli ${HOME}/.local/bin/watchtower-cli"
+
+[tasks.test]
+description = "Run tests"
+alias = "t"
+run = "go test ./..."
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.completions]
+description = "Generate shell completions from the usage spec"
+run = [
+    "mkdir -p completions",
+    "usage generate completion bash watchtower-cli -f watchtower.usage.kdl > completions/watchtower-cli.bash",
+    "usage generate completion zsh watchtower-cli -f watchtower.usage.kdl > completions/watchtower-cli.zsh",
+    "usage generate completion fish watchtower-cli -f watchtower.usage.kdl > completions/watchtower-cli.fish",
+]
+
+[tasks.ci]
+description = "Run vet, test, and build"
+depends = ["vet", "test", "build"]
