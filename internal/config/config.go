@@ -56,6 +56,20 @@ func xdgConfigPath() string {
 	return filepath.Join(home, ".config", "watchtower-cli", ConfigFileName)
 }
 
+// PermissionWarning reports when path is readable by group or others.
+// An empty string means the file is owner-only, or it could not be stated.
+func PermissionWarning(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	perm := info.Mode().Perm()
+	if perm&0o077 == 0 {
+		return ""
+	}
+	return fmt.Sprintf("warning: %s is readable by group or others (mode %#o); it holds API tokens", path, perm)
+}
+
 // LoadConfig reads the config file at path. An empty path returns an empty
 // config without error. A missing file at a non-empty path is an error.
 func LoadConfig(path string) (*Config, error) {

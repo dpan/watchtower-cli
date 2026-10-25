@@ -16,15 +16,19 @@ _watchtower_cli() {
     fi
 
 	local cur prev words cword comp_args
-    _init_completion -n : -- "$@" || return
+    # `=` and `:` stay inside the word so complete-word sees `--out=a` as one word
+    # rather than `--out`, `=`, `a`.
+    _init_completion -n := -- "$@" || return
     local spec_dir="${XDG_CACHE_HOME:-$HOME/.cache}/usage"
     [[ -d "$spec_dir" ]] || mkdir -p -m 700 "$spec_dir"
     local spec_file="$spec_dir/usage__usage_spec_watchtower_cli.spec"
     cat >| "$spec_file" <<'__USAGE_EOF__'
 name watchtower-cli
 bin watchtower-cli
-version "0.1.0-dev"
-about "Command-line client for the Watchtower HTTP API (v1.21.0)"
+version "0.2.0"
+author "Dimitris Panagiotakis"
+about "Command-line client for the Watchtower HTTP API (v1.23.2)"
+license MIT
 flag --url help="Watchtower HTTP API base URL" global=#true env=WATCHTOWER_HTTP_API_URL {
     arg <url>
 }
@@ -41,6 +45,9 @@ flag --timeout help="HTTP client timeout" global=#true default="10m" {
     arg <duration>
 }
 flag "-k --insecure" help="Skip TLS certificate verification" global=#true
+flag --cacert help="PEM CA bundle to trust for the API URL, instead of the system trust store" global=#true {
+    arg <path>
+}
 cmd update help="Trigger container updates (POST /v1/update)" effect=write {
     flag "-i --image" help="Filter by image name (repeatable)" {
         arg <image>
@@ -104,6 +111,7 @@ cmd status help="Summary of the most recent scan (GET /v1/status)" effect=read
 cmd metrics help="Prometheus metrics (GET /v1/metrics)" effect=read
 cmd events help="Stream operational events via SSE (GET /v1/events)" effect=read
 cmd probe help="TCP connectivity check against the API URL (does not send a token)" effect=read
+cmd targets help="List saved targets and report when the token file is readable by group or others" effect=read
 cmd health help="Watchtower health probes" effect=read {
     cmd live help="Liveness probe (GET /livez)" {
         alias liveness
@@ -114,9 +122,29 @@ cmd health help="Watchtower health probes" effect=read {
     cmd startup help="Startup probe (GET /startupz)"
 }
 __USAGE_EOF__
-    # shellcheck disable=SC2207
-	COMPREPLY=($(compgen -W "$(command usage complete-word --shell bash -f "$spec_file" --cword="$cword" -- "${words[@]}")" -- "$cur"))
-	__ltrim_colon_completions "$cur"
+    # stderr is discarded: a line that doesn't parse (`watchtower-cli help <Tab>`) makes
+    # complete-word fail, and its error would be printed over the prompt.
+    # Complete the text before the cursor, as `$cur` holds it: with the cursor in `--out=a|X`
+    # the value typed so far is `a`, not `aX`.
+    words[cword]="$cur"
+    # One candidate per line, kept as text. `compgen -W` expands every word it is handed
+    # (`$(…)`, globs, quote removal), so a candidate printed by a `run=` completer would have
+    # run as a command here, and `*` would have become the files in the working directory.
+    COMPREPLY=()
+    local __usage_line
+    while IFS= read -r __usage_line; do
+        [[ -n "$__usage_line" && "$__usage_line" == "$cur"* ]] && COMPREPLY+=("$__usage_line")
+    done < <(command usage complete-word --shell bash -f "$spec_file" --cword="$cword" -- "${words[@]}" 2>/dev/null)
+	# Readline only replaces the text after the last word break, so strip the part of
+	# `$cur` up to its last `:` or `=` from each candidate (what __ltrim_colon_completions
+	# does for `:` alone).
+	local breaks="${COMP_WORDBREAKS//[^:=]/}"
+	# An empty COMPREPLY is left alone: before bash 4.4 the rewrite below would turn it into
+	# one empty candidate.
+	if ((${#COMPREPLY[@]})) && [[ -n "$breaks" && "$cur" == *["$breaks"]* ]]; then
+		local break_prefix="${cur%"${cur##*["$breaks"]}"}"
+		COMPREPLY=("${COMPREPLY[@]#"$break_prefix"}")
+	fi
     # shellcheck disable=SC2181
     if [[ $? -ne 0 ]]; then
         unset COMPREPLY

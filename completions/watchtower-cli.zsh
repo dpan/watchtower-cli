@@ -20,8 +20,10 @@ _watchtower_cli() {
   cat >| "$spec_file" <<'__USAGE_EOF__'
 name watchtower-cli
 bin watchtower-cli
-version "0.1.0-dev"
-about "Command-line client for the Watchtower HTTP API (v1.21.0)"
+version "0.2.0"
+author "Dimitris Panagiotakis"
+about "Command-line client for the Watchtower HTTP API (v1.23.2)"
+license MIT
 flag --url help="Watchtower HTTP API base URL" global=#true env=WATCHTOWER_HTTP_API_URL {
     arg <url>
 }
@@ -38,6 +40,9 @@ flag --timeout help="HTTP client timeout" global=#true default="10m" {
     arg <duration>
 }
 flag "-k --insecure" help="Skip TLS certificate verification" global=#true
+flag --cacert help="PEM CA bundle to trust for the API URL, instead of the system trust store" global=#true {
+    arg <path>
+}
 cmd update help="Trigger container updates (POST /v1/update)" effect=write {
     flag "-i --image" help="Filter by image name (repeatable)" {
         arg <image>
@@ -101,6 +106,7 @@ cmd status help="Summary of the most recent scan (GET /v1/status)" effect=read
 cmd metrics help="Prometheus metrics (GET /v1/metrics)" effect=read
 cmd events help="Stream operational events via SSE (GET /v1/events)" effect=read
 cmd probe help="TCP connectivity check against the API URL (does not send a token)" effect=read
+cmd targets help="List saved targets and report when the token file is readable by group or others" effect=read
 cmd health help="Watchtower health probes" effect=read {
     cmd live help="Liveness probe (GET /livez)" {
         alias liveness
@@ -112,14 +118,32 @@ cmd health help="Watchtower health probes" effect=read {
 }
 __USAGE_EOF__
   local -a values=() descs=() inserts=()
-  local needs_menu=0 line
+  local needs_menu=0 line usage_err=
   while IFS= read -r line; do
+    if [[ "$line" == $'\x1f'* ]]; then
+      usage_err="${line#?}"
+      continue
+    fi
     local -a parts=("${(@ps:\t:)line}")
     values+=("${parts[1]}")
     descs+=("${parts[2]}")
     inserts+=("${parts[3]}")
     [[ "${parts[3]}" == "'"* ]] && needs_menu=1
-  done < <(command usage complete-word --shell zsh -f "$spec_file" -- "${(Q)words[@]}")
+  done < <(
+    { _usage_err="$(command usage complete-word --shell zsh -f "$spec_file" --cword=$((CURRENT - 1)) -- "${(Q)words[@]}" 2>&1 >&3 3>&-)"; } 3>&1
+    (( $? )) || _usage_err=
+    for _usage_l in "${(@f)_usage_err}"; do
+      [[ "$_usage_l" == \[[A-Z]*\]* ]] && continue
+      _usage_l="${_usage_l#"${_usage_l%%[![:space:]]*}"}"
+      _usage_l="${_usage_l#Error:}"
+      _usage_l="${_usage_l#"${_usage_l%%[![:space:]]*}"}"
+      _usage_l="${_usage_l#× }"
+      [[ -z "$_usage_l" || ( "$_usage_l" == *::* && "$_usage_l" != *' '* ) ]] && continue
+      print -r -- $'\x1f'"$_usage_l"
+      break
+    done
+  )
+  [[ -n "$usage_err" ]] && _message -r "usage: ${usage_err//\%/%%}"
   (( needs_menu )) && compstate[insert]=menu
   if (( ${#inserts[@]} )); then
     local -a _usage_display=()

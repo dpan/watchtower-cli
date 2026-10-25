@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dpan/watchtower-cli/internal/config"
 )
@@ -121,13 +123,20 @@ func TestHelpDoesNotRequireURL(t *testing.T) {
 	}
 }
 
-func TestMissingCommand(t *testing.T) {
-	_, err := exec(t, "--url", "http://127.0.0.1:1")
-	if err == nil {
-		t.Fatal("expected error")
+func TestNoCommandShowsHelp(t *testing.T) {
+	t.Setenv("WATCHTOWER_HTTP_API_URL", "")
+	cases := [][]string{
+		nil,
+		{"--url", "http://127.0.0.1:1"},
 	}
-	if !strings.Contains(err.Error(), "command required") {
-		t.Errorf("error: %v", err)
+	for _, args := range cases {
+		out, err := exec(t, args...)
+		if err != nil {
+			t.Fatalf("args %v: %v\n%s", args, err, out)
+		}
+		if !strings.Contains(out, "Available Commands") || !strings.Contains(out, "update") {
+			t.Errorf("args %v help:\n%s", args, out)
+		}
 	}
 }
 
@@ -209,5 +218,152 @@ func TestStatusNoContent(t *testing.T) {
 	}
 	if !strings.Contains(out, "no update scan has run yet") {
 		t.Errorf("output: %s", out)
+	}
+}
+
+func TestHandlerDeadline(t *testing.T) {
+	cases := []struct {
+		client, api, want time.Duration
+	}{
+		{10 * time.Minute, 0, 10*time.Minute + handlerGrace},
+		{10 * time.Minute, 15 * time.Minute, 15*time.Minute + handlerGrace},
+		{10 * time.Minute, 2 * time.Minute, 10*time.Minute + handlerGrace},
+		{0, 5 * time.Minute, 0},
+	}
+	for _, tc := range cases {
+		if got := handlerDeadline(tc.client, tc.api); got != tc.want {
+			t.Errorf("handlerDeadline(%s, %s) = %s, want %s", tc.client, tc.api, got, tc.want)
+		}
+	}
+}
+
+func TestAPITimeoutValidation(t *testing.T) {
+	_, err := exec(t, "--url", "http://127.0.0.1:1", "update", "--api-timeout", "2min")
+	if err == nil || !strings.Contains(err.Error(), "invalid argument") {
+		t.Fatalf("2min: %v", err)
+	}
+	_, err = exec(t, "--url", "http://127.0.0.1:1", "update", "--api-timeout", "-1s")
+	if err == nil || !strings.Contains(err.Error(), "--api-timeout must be positive") {
+		t.Fatalf("-1s: %v", err)
+	}
+}
+
+func TestEventsCancel(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		_, _ = w.Write([]byte("data: hello\n\n"))
+		flusher.Flush()
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := NewRoot()
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--url", srv.URL, "--events-token", "tok", "events"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- cmd.Execute()
+	}()
+
+	select {
+	case <-started:
+	case err := <-errCh:
+		t.Fatalf("events exited before the stream started: %v\n%s", err, out.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the event stream")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("cancel: %v\n%s", err, out.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for events to stop")
+	}
+}
+
+func TestCACertFlags(t *testing.T) {
+	_, err := exec(t, "--url", "https://example.com", "--insecure", "--cacert", "x", "status")
+	if err == nil || !strings.Contains(err.Error(), "cannot be used") {
+		t.Fatalf("insecure+cacert: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.pem")
+	_, err = exec(t, "--url", "https://example.com", "--cacert", missing, "status")
+	if err == nil || !strings.Contains(err.Error(), "reading CA file") {
+		t.Fatalf("missing CA: %v", err)
+	}
+}
+
+func TestTargetFileModeWarning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFileName)
+	content := "[[target]]\nname = \"prod\"\nurl = \"http://127.0.0.1:1\"\ntoken = \"from-config\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WATCHTOWER_CLI_CONFIG", path)
+	out, err := exec(t, "--target", "prod", "status")
+	if err == nil {
+		t.Fatal("expected connection error")
+	}
+	if strings.Contains(out, "readable by group") || strings.Contains(err.Error(), "readable by group") {
+		t.Errorf("permission notice leaked into command output: %s\nerr: %v", out, err)
+	}
+}
+
+func TestTargetsCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFileName)
+	content := "[[target]]\nname = \"prod\"\nurl = \"http://127.0.0.1:1\"\ntoken = \"secret\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WATCHTOWER_CLI_CONFIG", path)
+
+	out, err := exec(t, "targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "readable by group") || !strings.Contains(out, "prod") {
+		t.Fatalf("output: %s", out)
+	}
+	if strings.Contains(out, "secret") || strings.Contains(out, "127.0.0.1") {
+		t.Fatalf("target secrets leaked: %s", out)
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec(t, "targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "readable by group") {
+		t.Fatalf("output: %s", out)
+	}
+	if !strings.Contains(out, "prod") {
+		t.Fatalf("output: %s", out)
 	}
 }

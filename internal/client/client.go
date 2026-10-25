@@ -3,16 +3,18 @@ package client
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
-const UserAgent = "watchtower-cli/0.1.0-dev"
+const UserAgent = "watchtower-cli/0.2.0"
 
 type Client struct {
 	BaseURL string
@@ -37,6 +39,44 @@ func (c *Client) WithToken(token string) *Client {
 	out := *c
 	out.Token = token
 	return &out
+}
+
+// WithTimeout returns a shallow copy whose HTTP client uses timeout.
+// Zero means no client timeout.
+func (c *Client) WithTimeout(timeout time.Duration) *Client {
+	httpClient := *c.HTTP
+	httpClient.Timeout = timeout
+	out := *c
+	out.HTTP = &httpClient
+	return &out
+}
+
+// WithRootCAs returns a shallow copy that trusts pool as its only CA set.
+func (c *Client) WithRootCAs(pool *x509.CertPool) *Client {
+	if pool == nil {
+		return c
+	}
+	transport := c.HTTP.Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+	httpClient := *c.HTTP
+	httpClient.Transport = transport
+	out := *c
+	out.HTTP = &httpClient
+	return &out
+}
+
+// LoadRootCAs reads PEM certificates from path. The file replaces the system
+// trust store for the client that uses it.
+func LoadRootCAs(path string) (*x509.CertPool, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading CA file %s: %w", path, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("CA file %s contains no certificates", path)
+	}
+	return pool, nil
 }
 
 type Result struct {

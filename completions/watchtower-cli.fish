@@ -10,8 +10,10 @@ end
 
 set _usage_spec_watchtower_cli 'name watchtower-cli
 bin watchtower-cli
-version "0.1.0-dev"
-about "Command-line client for the Watchtower HTTP API (v1.21.0)"
+version "0.2.0"
+author "Dimitris Panagiotakis"
+about "Command-line client for the Watchtower HTTP API (v1.23.2)"
+license MIT
 flag --url help="Watchtower HTTP API base URL" global=#true env=WATCHTOWER_HTTP_API_URL {
     arg <url>
 }
@@ -28,6 +30,9 @@ flag --timeout help="HTTP client timeout" global=#true default="10m" {
     arg <duration>
 }
 flag "-k --insecure" help="Skip TLS certificate verification" global=#true
+flag --cacert help="PEM CA bundle to trust for the API URL, instead of the system trust store" global=#true {
+    arg <path>
+}
 cmd update help="Trigger container updates (POST /v1/update)" effect=write {
     flag "-i --image" help="Filter by image name (repeatable)" {
         arg <image>
@@ -91,6 +96,7 @@ cmd status help="Summary of the most recent scan (GET /v1/status)" effect=read
 cmd metrics help="Prometheus metrics (GET /v1/metrics)" effect=read
 cmd events help="Stream operational events via SSE (GET /v1/events)" effect=read
 cmd probe help="TCP connectivity check against the API URL (does not send a token)" effect=read
+cmd targets help="List saved targets and report when the token file is readable by group or others" effect=read
 cmd health help="Watchtower health probes" effect=read {
     cmd live help="Liveness probe (GET /livez)" {
         alias liveness
@@ -106,9 +112,13 @@ test -d "$spec_dir"; or mkdir -p -m 700 "$spec_dir"
 set -l spec_file "$spec_dir/usage__usage_spec_watchtower_cli.spec"
 echo $_usage_spec_watchtower_cli > "$spec_file"
 
-set -l tokens
+# stderr is discarded: a line that doesn't parse (`watchtower-cli help <Tab>`) makes
+# complete-word fail, and its error would be printed over the prompt.
+# The word being completed is cut at the cursor (`-c`) and unquoted, so
+# `'prod<Tab>` and `sub\ dir/<Tab>` match the same values as their bare
+# spellings; fish re-quotes whatever it inserts.
 if commandline -x >/dev/null 2>&1
-    complete -xc watchtower-cli -a "(command usage complete-word --shell fish -f \"$spec_file\" -- (commandline -xpc) (commandline -t))"
+    complete -xc watchtower-cli -a "(command usage complete-word --shell fish -f \"$spec_file\" -- (commandline -xpc) (commandline -ct | string unescape) 2>/dev/null)"
 else
-    complete -xc watchtower-cli -a "(command usage complete-word --shell fish -f \"$spec_file\" -- (commandline -opc) (commandline -t))"
+    complete -xc watchtower-cli -a "(command usage complete-word --shell fish -f \"$spec_file\" -- (commandline -opc) (commandline -ct | string unescape) 2>/dev/null)"
 end

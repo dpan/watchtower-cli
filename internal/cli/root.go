@@ -11,7 +11,7 @@ import (
 	"github.com/dpan/watchtower-cli/internal/config"
 )
 
-const version = "0.1.0-dev"
+const version = "0.2.0"
 
 type Options struct {
 	URL         string
@@ -20,6 +20,7 @@ type Options struct {
 	EventsToken string
 	Timeout     time.Duration
 	Insecure    bool
+	CACert      string
 	Client      *client.Client
 }
 
@@ -27,21 +28,33 @@ func NewRoot() *cobra.Command {
 	o := &Options{}
 	root := &cobra.Command{
 		Use:           "watchtower-cli",
-		Short:         "Command-line client for the Watchtower HTTP API (v1.21.0)",
+		Short:         "Command-line client for the Watchtower HTTP API (v1.23.2)",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("command required, see --help")
+			return cmd.Help()
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if skipClientSetup(cmd) {
+			// No subcommand: RunE prints help and does not call the API.
+			if skipClientSetup(cmd) || cmd.Parent() == nil {
 				return nil
 			}
 			if err := o.resolve(cmd); err != nil {
 				return err
 			}
-			o.Client = client.NewClient(o.URL, o.Token, o.Timeout, o.Insecure)
+			if o.Insecure && o.CACert != "" {
+				return fmt.Errorf("--cacert cannot be used with --insecure")
+			}
+			c := client.NewClient(o.URL, o.Token, o.Timeout, o.Insecure)
+			if o.CACert != "" {
+				pool, err := client.LoadRootCAs(o.CACert)
+				if err != nil {
+					return err
+				}
+				c = c.WithRootCAs(pool)
+			}
+			o.Client = c
 			return nil
 		},
 	}
@@ -55,6 +68,7 @@ func NewRoot() *cobra.Command {
 	f.StringVar(&o.EventsToken, "events-token", "", "events SSE token (env WATCHTOWER_HTTP_API_EVENTS_TOKEN)")
 	f.DurationVar(&o.Timeout, "timeout", 10*time.Minute, "HTTP client timeout")
 	f.BoolVarP(&o.Insecure, "insecure", "k", false, "skip TLS certificate verification")
+	f.StringVar(&o.CACert, "cacert", "", "PEM CA bundle to trust for the API URL, instead of the system trust store")
 
 	o.addCommands(root)
 	return root
@@ -120,7 +134,7 @@ func (o *Options) resolve(cmd *cobra.Command) error {
 func skipClientSetup(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "help", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+		case "help", "targets", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
 			return true
 		}
 	}

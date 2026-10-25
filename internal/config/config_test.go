@@ -122,3 +122,25 @@ url = "http://local:8080"
 		t.Errorf("expected env path, got %q", path)
 	}
 }
+
+func TestPermissionWarning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.toml")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := PermissionWarning(path); !strings.Contains(msg, "readable by group") {
+		t.Errorf("0644: %q", msg)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if msg := PermissionWarning(path); msg != "" {
+		t.Errorf("0600: %q", msg)
+	}
+	if msg := PermissionWarning(filepath.Join(t.TempDir(), "missing")); msg != "" {
+		t.Errorf("missing: %q", msg)
+	}
+}

@@ -3,6 +3,7 @@
 # then use: watchtower-cli --target <name> <command>
 #
 # Do not commit targets.toml — it holds tokens.
+# chmod 600 targets.toml
 
 [[target]]
 name = "homelab"

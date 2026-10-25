@@ -1,6 +1,6 @@
 # watchtower-cli
 
-Command-line client for the [Watchtower HTTP API](https://watchtower.nickfedor.com/v1.21.0/http-api/overview/) (v1.21.0).
+Command-line client for the [Watchtower HTTP API](https://watchtower.nickfedor.com/v1.23.2/http-api/overview/) (v1.23.2).
 
 ## Install
 
@@ -25,9 +25,9 @@ watchtower-cli health live
 watchtower-cli containers details --name nginx
 ```
 
-Global flags: `--url`, `--target` / `-t`, `--token`, `--events-token`, `--timeout`, `--insecure` / `-k`.
+Global flags: `--url`, `--target` / `-t`, `--token`, `--events-token`, `--timeout`, `--insecure` / `-k`, `--cacert`.
 
-A command is required. URL comes from `--url`, `--target`, or `WATCHTOWER_HTTP_API_URL`.
+With no command, the CLI prints help. URL comes from `--url`, `--target`, or `WATCHTOWER_HTTP_API_URL`.
 
 ## Configuration
 
@@ -43,7 +43,7 @@ events_token = "your-events-token"
 
 Override the path with `WATCHTOWER_CLI_CONFIG`. Tokens: `WATCHTOWER_HTTP_API_TOKEN` and `WATCHTOWER_HTTP_API_EVENTS_TOKEN` (`/v1/events` uses a separate token).
 
-Do not commit `targets.toml`.
+Do not commit `targets.toml`. Keep it mode 0600. `watchtower-cli targets` reports when that file is readable by group or others.
 
 ## Development
 

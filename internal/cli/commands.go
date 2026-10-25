@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +12,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/dpan/watchtower-cli/internal/client"
+	"github.com/dpan/watchtower-cli/internal/config"
 )
 
 func (o *Options) addCommands(root *cobra.Command) {
@@ -26,6 +32,7 @@ func (o *Options) addCommands(root *cobra.Command) {
 		o.metricsCmd(),
 		o.eventsCmd(),
 		o.probeCmd(),
+		o.targetsCmd(),
 		o.healthCmd(),
 	)
 }
@@ -33,7 +40,7 @@ func (o *Options) addCommands(root *cobra.Command) {
 func (o *Options) updateCmd() *cobra.Command {
 	var images, containers []string
 	var async bool
-	var apiTimeout string
+	var apiTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Trigger container updates (POST /v1/update)",
@@ -42,36 +49,38 @@ func (o *Options) updateCmd() *cobra.Command {
 			if async {
 				q.Set("async", "true")
 			}
-			if apiTimeout != "" {
-				q.Set("timeout", apiTimeout)
+			c, err := o.applyAPITimeout(q, apiTimeout)
+			if err != nil {
+				return err
 			}
-			return o.call(cmd, http.MethodPost, "/v1/update", q)
+			return o.callClient(cmd, c, http.MethodPost, "/v1/update", q)
 		},
 	}
 	cmd.Flags().StringArrayVarP(&images, "image", "i", nil, "image filter (repeatable)")
 	cmd.Flags().StringArrayVarP(&containers, "container", "c", nil, "container name or regex filter (repeatable)")
 	cmd.Flags().BoolVar(&async, "async", false, "run the update in the background (HTTP 202)")
-	cmd.Flags().StringVar(&apiTimeout, "api-timeout", "", "Watchtower handler timeout override (e.g. 2m)")
+	cmd.Flags().DurationVar(&apiTimeout, "api-timeout", 0, "Watchtower handler timeout override (e.g. 2m)")
 	return cmd
 }
 
 func (o *Options) checkCmd() *cobra.Command {
 	var images, containers []string
-	var apiTimeout string
+	var apiTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Check for available updates without applying them (POST /v1/check)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := filterQuery(images, containers)
-			if apiTimeout != "" {
-				q.Set("timeout", apiTimeout)
+			c, err := o.applyAPITimeout(q, apiTimeout)
+			if err != nil {
+				return err
 			}
-			return o.call(cmd, http.MethodPost, "/v1/check", q)
+			return o.callClient(cmd, c, http.MethodPost, "/v1/check", q)
 		},
 	}
 	cmd.Flags().StringArrayVarP(&images, "image", "i", nil, "image filter (repeatable)")
 	cmd.Flags().StringArrayVarP(&containers, "container", "c", nil, "container name or regex filter (repeatable)")
-	cmd.Flags().StringVar(&apiTimeout, "api-timeout", "", "Watchtower handler timeout override (e.g. 2m)")
+	cmd.Flags().DurationVar(&apiTimeout, "api-timeout", 0, "Watchtower handler timeout override (e.g. 2m)")
 	return cmd
 }
 
@@ -186,6 +195,10 @@ func (o *Options) eventsCmd() *cobra.Command {
 			c := o.Client.WithToken(o.EventsToken)
 			status, body, err := c.Stream(ctx, http.MethodGet, "/v1/events")
 			if err != nil {
+				// Ctrl+C cancels the stream. That is a clean stop.
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
 				return err
 			}
 			defer body.Close()
@@ -198,7 +211,10 @@ func (o *Options) eventsCmd() *cobra.Command {
 			for scanner.Scan() {
 				fmt.Fprintln(out, scanner.Text())
 			}
-			return scanner.Err()
+			if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
 		},
 	}
 }
@@ -213,6 +229,34 @@ func (o *Options) probeCmd() *cobra.Command {
 				return err
 			}
 			return writeJSON(cmd.OutOrStdout(), report)
+		},
+	}
+}
+
+func (o *Options) targetsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "targets",
+		Short: "List saved targets and report when the token file is readable by group or others",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := config.ConfigPath()
+			if err != nil {
+				return err
+			}
+			if path == "" {
+				return fmt.Errorf("no config file found (looked at ./%s and $XDG_CONFIG_HOME/watchtower-cli/%s)", config.ConfigFileName, config.ConfigFileName)
+			}
+			cfg, err := config.LoadConfig(path)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if msg := config.PermissionWarning(path); msg != "" {
+				fmt.Fprintln(out, msg)
+			}
+			for _, tgt := range cfg.Targets {
+				fmt.Fprintln(out, tgt.Name)
+			}
+			return nil
 		},
 	}
 }
@@ -252,8 +296,41 @@ func (o *Options) healthProbeCmd(use, short, path string, aliases ...string) *co
 	}
 }
 
+// handlerGrace lets the HTTP client outlast the Watchtower handler timeout
+// so a 503 is still delivered. Applied only to update and check.
+const handlerGrace = 10 * time.Second
+
+func handlerDeadline(clientTimeout, apiTimeout time.Duration) time.Duration {
+	if clientTimeout == 0 { // 0 means unlimited; already outlasts the handler
+		return 0
+	}
+	budget := clientTimeout
+	if apiTimeout > budget {
+		budget = apiTimeout
+	}
+	return budget + handlerGrace
+}
+
+func (o *Options) applyAPITimeout(q url.Values, apiTimeout time.Duration) (*client.Client, error) {
+	if apiTimeout < 0 {
+		return nil, fmt.Errorf("--api-timeout must be positive")
+	}
+	if apiTimeout > 0 {
+		q.Set("timeout", apiTimeout.String())
+	}
+	c := o.Client
+	if d := handlerDeadline(o.Timeout, apiTimeout); d != o.Timeout {
+		c = o.Client.WithTimeout(d)
+	}
+	return c, nil
+}
+
 func (o *Options) call(cmd *cobra.Command, method, path string, q url.Values) error {
-	res, err := o.Client.Do(cmd.Context(), method, path, q)
+	return o.callClient(cmd, o.Client, method, path, q)
+}
+
+func (o *Options) callClient(cmd *cobra.Command, c *client.Client, method, path string, q url.Values) error {
+	res, err := c.Do(cmd.Context(), method, path, q)
 	if err != nil {
 		return err
 	}

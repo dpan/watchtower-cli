@@ -1,7 +1,7 @@
 name "watchtower-cli"
 bin "watchtower-cli"
-about "Command-line client for the Watchtower HTTP API (v1.21.0)"
-version "0.1.0-dev"
+about "Command-line client for the Watchtower HTTP API (v1.23.2)"
+version "0.2.0"
 license "MIT"
 author "Dimitris Panagiotakis"
 
@@ -11,6 +11,7 @@ flag "--token <token>" global=#true help="API token sent as Authorization: Beare
 flag "--events-token <token>" global=#true help="Token for GET /v1/events (separate from the API token)" env="WATCHTOWER_HTTP_API_EVENTS_TOKEN"
 flag "--timeout <duration>" global=#true help="HTTP client timeout" default="10m"
 flag "-k --insecure" global=#true help="Skip TLS certificate verification"
+flag "--cacert <path>" global=#true help="PEM CA bundle to trust for the API URL, instead of the system trust store"
 
 cmd "update" help="Trigger container updates (POST /v1/update)" effect="write" {
     flag "-i --image <image>" help="Filter by image name (repeatable)"
@@ -54,6 +55,8 @@ cmd "metrics" help="Prometheus metrics (GET /v1/metrics)" effect="read"
 cmd "events" help="Stream operational events via SSE (GET /v1/events)" effect="read"
 
 cmd "probe" help="TCP connectivity check against the API URL (does not send a token)" effect="read"
+
+cmd "targets" help="List saved targets and report when the token file is readable by group or others" effect="read"
 
 cmd "health" help="Watchtower health probes" effect="read" {
     cmd "live" help="Liveness probe (GET /livez)" {
